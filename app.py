@@ -17,15 +17,10 @@ df = load_data()
 # Streamlit Title
 st.title("🚦 Chennai Traffic & Weather Live Map")
 
-# Sidebar - Dataset Preview
-st.sidebar.header("📂 Dataset Preview")
-st.sidebar.write(df.head())
-
-# Dropdown for Start & Destination
-st.sidebar.header("📍 Select Route")
-locations = df["Location"].unique().tolist()
-start_location = st.sidebar.selectbox("Start Location", locations)
-destination_location = st.sidebar.selectbox("Destination", locations)
+# Sidebar: User Input for Start and Destination
+st.sidebar.header("🛣️ Route Planner")
+start_point = st.sidebar.selectbox("Select Start Location", df["Location"].unique())
+destination = st.sidebar.selectbox("Select Destination", df["Location"].unique())
 
 # Get Current Time
 current_time = datetime.datetime.now()
@@ -41,11 +36,14 @@ def predict_weather(weather_now):
 df["Predicted Traffic"] = df["Traffic Density"].apply(predict_traffic)
 df["Predicted Weather"] = df["Weather Condition"].apply(predict_weather)
 
-# Initialize Map
+# Initialize Main Map
 chennai_map = folium.Map(location=[13.0827, 80.2707], zoom_start=12, tiles="CartoDB Positron")
 
-# Add Traffic Data to Map
-for _, row in df.iterrows():
+# Filter Start & Destination Data
+route_df = df[(df["Location"] == start_point) | (df["Location"] == destination)]
+
+# Add Traffic Data to Main Route Map
+for _, row in route_df.iterrows():
     risk_level = "🔴 High Risk" if row["Traffic Density"] == "High" else ("🟠 Medium Risk" if row["Traffic Density"] == "Medium" else "🟢 Low Risk")
     alt_route = "✅ Available" if row["Alternate Route Available"] == "Yes" else "❌ Not Available"
     
@@ -70,18 +68,25 @@ for _, row in df.iterrows():
         icon=folium.Icon(color=marker_color)
     ).add_to(chennai_map)
 
-# Display Map
+# Display Main Route Map
+st.subheader("🛣️ Main Route Traffic Details")
 folium_static(chennai_map)
 
-# Show Route Details
-st.write("### 📍 Route Details")
-route_df = df[(df["Location"] == start_location) | (df["Location"] == destination_location)]
-if not route_df.empty:
-    st.write(route_df[["Location", "Traffic Density", "Estimated Delay (Minutes)", "Alternate Route Available"]])
-else:
-    st.warning("No traffic data available for the selected route.")
+# Alternative Route Suggestion
+alternative_df = df[df["Alternate Route Available"] == "Yes"]
+low_traffic_alt = alternative_df[alternative_df["Traffic Density"] == "Low"]
 
-# Summary of High Traffic Areas
-high_traffic_summary = df[df["Traffic Density"] == "High"][["Location", "Estimated Delay (Minutes)"]].groupby("Location").mean().reset_index()
-st.write("### 🚦 High Traffic Areas & Estimated Delays")
-st.write(high_traffic_summary)
+if not low_traffic_alt.empty:
+    st.subheader("🚗 Suggested Alternative Route (Lower Traffic)")
+    alt_map = folium.Map(location=[13.0827, 80.2707], zoom_start=12, tiles="CartoDB Positron")
+    
+    for _, row in low_traffic_alt.iterrows():
+        folium.Marker(
+            location=[row["Latitude"], row["Longitude"]],
+            popup=f"Alternative Route - {row['Location']} (Low Traffic)",
+            icon=folium.Icon(color="green")
+        ).add_to(alt_map)
+    
+    folium_static(alt_map)
+else:
+    st.subheader("❌ No Alternative Routes Available with Low Traffic")
