@@ -8,7 +8,7 @@ import random
 # Load Dataset
 @st.cache_data
 def load_data():
-    file_path = "chennai_traffic_data_final.csv"
+    file_path = "/data/chennai_traffic_data_final.csv"
     df = pd.read_csv(file_path)
     return df
 
