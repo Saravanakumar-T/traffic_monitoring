@@ -4,6 +4,9 @@ import folium
 from streamlit_folium import folium_static
 import datetime
 import random
+import osmnx as ox
+import networkx as nx
+from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 
 # Load Dataset
@@ -16,7 +19,7 @@ def load_data():
 df = load_data()
 
 # Streamlit Title
-st.title("🚦 Chennai Traffic & Weather Live Map")
+st.title("🚦 Chennai Traffic & Alternative Route Map")
 
 # Sidebar - Dataset Preview
 st.sidebar.header("📂 Dataset Preview")
@@ -28,106 +31,52 @@ locations = df["Location"].unique().tolist()
 start_location = st.sidebar.selectbox("Start Location", locations)
 destination_location = st.sidebar.selectbox("Destination", locations)
 
-# Get Current Time
-current_time = datetime.datetime.now()
-next_hour_time = current_time + datetime.timedelta(hours=1)
+# Get coordinates for selected locations
+start_row = df[df["Location"] == start_location].iloc[0]
+destination_row = df[df["Location"] == destination_location].iloc[0]
+start_coords = (start_row["Latitude"], start_row["Longitude"])
+destination_coords = (destination_row["Latitude"], destination_row["Longitude"])
 
-# Function to Predict Traffic and Weather for Next Hour
-def predict_traffic(traffic_now):
-    return random.choice(["Low", "Medium", "High"]) if traffic_now == "High" else traffic_now
+# Get road network graph
+G = ox.graph_from_place("Chennai, India", network_type="drive")
 
-def predict_weather(weather_now):
-    return random.choice(["Sunny", "Cloudy", "Rainy", "Foggy", "Stormy"])
+# Find nearest nodes in the graph
+orig_node = ox.distance.nearest_nodes(G, start_coords[1], start_coords[0])
+dest_node = ox.distance.nearest_nodes(G, destination_coords[1], destination_coords[0])
 
-df["Predicted Traffic"] = df["Traffic Density"].apply(predict_traffic)
-df["Predicted Weather"] = df["Weather Condition"].apply(predict_weather)
+# Find shortest route
+shortest_route = nx.shortest_path(G, orig_node, dest_node, weight="length")
 
-# Initialize Main Map
-chennai_map = folium.Map(location=[13.0827, 80.2707], zoom_start=12, tiles="CartoDB Positron")
+# Find alternative (low-traffic) route by avoiding high-traffic nodes
+high_traffic_nodes = set(df[df["Traffic Density"] == "High"]["Location"])
 
-# Add Traffic Data to Map
-for _, row in df.iterrows():
-    risk_level = "🔴 High Risk" if row["Traffic Density"] == "High" else ("🟠 Medium Risk" if row["Traffic Density"] == "Medium" else "🟢 Low Risk")
-    alt_route = "✅ Available" if row["Alternate Route Available"] == "Yes" else "❌ Not Available"
-    
-    popup_text = f"""
-    <b>Location:</b> {row['Location']}<br>
-    <b>Current Time:</b> {current_time.strftime("%Y-%m-%d %H:%M:%S")}<br>
-    <b>Traffic:</b> {row['Traffic Density']}<br>
-    <b>Weather:</b> {row['Weather Condition']}<br>
-    <b>Temperature:</b> {row['Temperature (°C)']}°C<br>
-    <b>Risk Level:</b> {risk_level}<br>
-    <b>Estimated Delay:</b> ⏳ {row['Estimated Delay (Minutes)']} min<br>
-    <b>📌 Predicted Traffic (Next Hour):</b> {row['Predicted Traffic']}<br>
-    <b>📌 Predicted Weather (Next Hour):</b> {row['Predicted Weather']}<br>
-    <b>Alternate Route:</b> {alt_route}
-    """
-    
-    marker_color = "red" if row["Traffic Density"] == "High" else ("orange" if row["Traffic Density"] == "Medium" else "green")
-    
-    folium.Marker(
-        location=[row["Latitude"], row["Longitude"]],
-        popup=popup_text,
-        icon=folium.Icon(color=marker_color)
-    ).add_to(chennai_map)
+# Remove high-traffic nodes from the graph
+G_low_traffic = G.copy()
+for node in list(G.nodes):
+    node_location = ox.geocode_to_gdf([ox.graph_to_gdfs(G, nodes=True).loc[node]["geometry"]])
+    if node_location.iloc[0]["geometry"] in high_traffic_nodes:
+        G_low_traffic.remove_node(node)
 
-# Display Main Map
-st.write("### 🗺️ Current Traffic Map")
-folium_static(chennai_map)
+# Find alternative route
+try:
+    alt_route = nx.shortest_path(G_low_traffic, orig_node, dest_node, weight="length")
+except:
+    alt_route = shortest_route  # If no low-traffic route is found, use shortest route
 
-# Find Alternative Low-Traffic Route
-st.write("### 🚗 Suggested Alternative Route")
-alt_map = folium.Map(location=[13.0827, 80.2707], zoom_start=12, tiles="CartoDB Positron")
+# Initialize Map
+route_map = folium.Map(location=start_coords, zoom_start=12, tiles="CartoDB Positron")
 
-start_data = df[df["Location"] == start_location].iloc[0]
-dest_data = df[df["Location"] == destination_location].iloc[0]
+# Plot shortest route (blue)
+shortest_path_coords = [(G.nodes[node]["y"], G.nodes[node]["x"]) for node in shortest_route]
+folium.PolyLine(shortest_path_coords, color="blue", weight=5, opacity=0.7, tooltip="Shortest Route").add_to(route_map)
 
-low_traffic_df = df[df["Traffic Density"] == "Low"]
-shortest_distance = float("inf")
-best_alternative = None
+# Plot alternative route (green)
+alt_path_coords = [(G.nodes[node]["y"], G.nodes[node]["x"]) for node in alt_route]
+folium.PolyLine(alt_path_coords, color="green", weight=5, opacity=0.7, tooltip="Low-Traffic Route").add_to(route_map)
 
-for _, row in low_traffic_df.iterrows():
-    distance = geodesic((start_data["Latitude"], start_data["Longitude"]), (row["Latitude"], row["Longitude"])).km + \
-               geodesic((row["Latitude"], row["Longitude"]), (dest_data["Latitude"], dest_data["Longitude"])).km
-    if distance < shortest_distance:
-        shortest_distance = distance
-        best_alternative = row
+# Mark start and destination points
+folium.Marker(start_coords, icon=folium.Icon(color="blue", icon="play"), popup=f"Start: {start_location}").add_to(route_map)
+folium.Marker(destination_coords, icon=folium.Icon(color="red", icon="flag"), popup=f"Destination: {destination_location}").add_to(route_map)
 
-if best_alternative is not None:
-    folium.Marker(
-        location=[start_data["Latitude"], start_data["Longitude"]],
-        popup=f"Start: {start_location}",
-        icon=folium.Icon(color="blue", icon="play")
-    ).add_to(alt_map)
-    
-    folium.Marker(
-        location=[best_alternative["Latitude"], best_alternative["Longitude"]],
-        popup=f"Alternative Route via {best_alternative['Location']}\nTraffic: {best_alternative['Traffic Density']}",
-        icon=folium.Icon(color="green", icon="road")
-    ).add_to(alt_map)
-    
-    folium.Marker(
-        location=[dest_data["Latitude"], dest_data["Longitude"]],
-        popup=f"Destination: {destination_location}",
-        icon=folium.Icon(color="red", icon="flag")
-    ).add_to(alt_map)
-    
-    st.success(f"Suggested Alternative Route: {start_location} ➝ {best_alternative['Location']} ➝ {destination_location}")
-else:
-    st.warning("No low-traffic alternative route found.")
-
-# Display Alternative Route Map
-folium_static(alt_map)
-
-# Show Route Details
-st.write("### 📍 Route Details")
-route_df = df[(df["Location"] == start_location) | (df["Location"] == destination_location)]
-if not route_df.empty:
-    st.write(route_df[["Location", "Traffic Density", "Estimated Delay (Minutes)", "Alternate Route Available"]])
-else:
-    st.warning("No traffic data available for the selected route.")
-
-# Summary of High Traffic Areas
-high_traffic_summary = df[df["Traffic Density"] == "High"][["Location", "Estimated Delay (Minutes)"]].groupby("Location").mean().reset_index()
-st.write("### 🚦 High Traffic Areas & Estimated Delays")
-st.write(high_traffic_summary)
+# Display Map
+folium_static(route_map)
