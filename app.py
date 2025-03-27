@@ -17,9 +17,15 @@ df = load_data()
 # Streamlit Title
 st.title("🚦 Chennai Traffic & Weather Live Map")
 
-# Display Data Preview
+# Sidebar - Dataset Preview
 st.sidebar.header("📂 Dataset Preview")
 st.sidebar.write(df.head())
+
+# Dropdown for Start & Destination
+st.sidebar.header("📍 Select Route")
+locations = df["Location"].unique().tolist()
+start_location = st.sidebar.selectbox("Start Location", locations)
+destination_location = st.sidebar.selectbox("Destination", locations)
 
 # Get Current Time
 current_time = datetime.datetime.now()
@@ -66,6 +72,14 @@ for _, row in df.iterrows():
 
 # Display Map
 folium_static(chennai_map)
+
+# Show Route Details
+st.write("### 📍 Route Details")
+route_df = df[(df["Location"] == start_location) | (df["Location"] == destination_location)]
+if not route_df.empty:
+    st.write(route_df[["Location", "Traffic Density", "Estimated Delay (Minutes)", "Alternate Route Available"]])
+else:
+    st.warning("No traffic data available for the selected route.")
 
 # Summary of High Traffic Areas
 high_traffic_summary = df[df["Traffic Density"] == "High"][["Location", "Estimated Delay (Minutes)"]].groupby("Location").mean().reset_index()
